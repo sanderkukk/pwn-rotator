@@ -62,9 +62,9 @@ impl Rotator {
         Ok(response.trim().to_string())
     }
 
-    /// Parse a GS-232B position response `AZ=aaa EL=eee` into `(azimuth, elevation)`.
+    /// Parse a GS-232B position response `AZ=xxx EL=yyy` into `(azimuth, elevation)`.
     fn parse_position(raw: &str) -> Result<(f32, f32), RotatorError> {
-        // Response format: "AZ=aaa EL=eee"  (e.g. "AZ=123 EL=045")
+        // Response format: "AZ=xxx EL=yyy"  (e.g. "AZ=405 EL=045")
         let mut az: Option<f32> = None;
         let mut el: Option<f32> = None;
         for part in raw.split_whitespace() {
@@ -82,10 +82,10 @@ impl Rotator {
 
     /// Query the current azimuth only (`C` command).
     ///
-    /// Response format: `AZ=aaa`
+    /// Response format: `AZ=<degrees>`
     pub fn get_azimuth(&self) -> Result<f32, RotatorError> {
         let raw = self.send("C")?;
-        // Response is "AZ=aaa"
+        // Response is "AZ=<degrees>" (e.g. "AZ=270" or "AZ=405")
         let az: f32 = raw
             .strip_prefix("AZ=")
             .and_then(|v| v.parse().ok())
