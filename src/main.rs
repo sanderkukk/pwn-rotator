@@ -11,12 +11,15 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use config::Config;
 use rotator::Rotator;
-use routes::{AppState, get_config, get_status, post_rotate, post_stop};
+use routes::{AppState, get_status, post_rotate, post_stop};
 
 #[tokio::main]
 async fn main() {
     fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("pwn_rotator=info".parse().unwrap()))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("pwn_rotator=info".parse().unwrap()),
+        )
         .init();
 
     let cfg = Config::from_env();
@@ -28,16 +31,12 @@ async fn main() {
         std::process::exit(1);
     });
 
-    let state = AppState {
-        rotator,
-        config: cfg.clone(),
-    };
+    let state = AppState { rotator };
 
     let app = Router::new()
         .route("/status", get(get_status))
         .route("/rotate", post(post_rotate))
         .route("/stop", post(post_stop))
-        .route("/config", get(get_config))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen_addr)
@@ -50,4 +49,3 @@ async fn main() {
     info!(addr = %cfg.listen_addr, "listening");
     axum::serve(listener, app).await.unwrap();
 }
-

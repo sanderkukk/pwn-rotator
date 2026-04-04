@@ -7,23 +7,24 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-use crate::{config::Config, rotator::{Rotator, RotatorError}};
+use crate::{rotator::{Rotator, RotatorError}};
 
 /// Shared application state injected into every handler.
 #[derive(Clone)]
 pub struct AppState {
     pub rotator: Rotator,
-    pub config: Config,
 }
 
-// ── error conversion ────────────────────────────────────────────────────────
+// ── error conversion ──────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub(crate) struct ApiError(RotatorError);
 
-impl From<RotatorError> for ApiError {
-    fn from(e: RotatorError) -> Self {
-        Self(e)
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -33,12 +34,17 @@ impl IntoResponse for ApiError {
             RotatorError::OutOfRange(_) => StatusCode::UNPROCESSABLE_ENTITY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        let body = serde_json::json!({ "error": self.0.to_string() });
-        (status, Json(body)).into_response()
+        (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
     }
 }
 
-// ── response types ───────────────────────────────────────────────────────────
+impl From<RotatorError> for ApiError {
+    fn from(e: RotatorError) -> Self {
+        Self(e)
+    }
+}
+
+// ── response / request types ──────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct PositionResponse {
@@ -46,30 +52,18 @@ pub struct PositionResponse {
     pub elevation: f32,
 }
 
-#[derive(Serialize)]
-pub struct AzimuthResponse {
-    pub azimuth: f32,
-}
-
-#[derive(Serialize)]
-pub struct ConfigResponse {
-    pub device: String,
-    pub baud_rate: u32,
-    pub listen_addr: String,
-}
-
-// ── request types ────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct RotateRequest {
     pub azimuth: u16,
     pub elevation: Option<u16>,
 }
 
-// ── handlers ─────────────────────────────────────────────────────────────────
+// ── handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /status` – return current azimuth and elevation.
-pub async fn get_status(State(state): State<AppState>) -> Result<Json<PositionResponse>, ApiError> {
+pub async fn get_status(
+    State(state): State<AppState>,
+) -> Result<Json<PositionResponse>, ApiError> {
     let (azimuth, elevation) = tokio::task::spawn_blocking(move || {
         state.rotator.get_position()
     })
@@ -100,19 +94,12 @@ pub async fn post_rotate(
 }
 
 /// `POST /stop` – stop all rotator movement.
-pub async fn post_stop(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
+pub async fn post_stop(
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
     tokio::task::spawn_blocking(move || state.rotator.stop())
         .await
         .expect("blocking task panicked")?;
 
     Ok(StatusCode::OK)
-}
-
-/// `GET /config` – return current runtime configuration (read-only).
-pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
-    Json(ConfigResponse {
-        device: state.config.device.clone(),
-        baud_rate: state.config.baud_rate,
-        listen_addr: state.config.listen_addr.clone(),
-    })
 }
