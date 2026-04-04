@@ -3,8 +3,8 @@
 //! Supported commands:
 //! * `C`          – query current azimuth; response: `AZ=aaa`
 //! * `C2`         – query current azimuth **and** elevation; response: `AZ=aaa EL=eee`
-//! * `M aaa`      – rotate to azimuth (0-450 degrees)
-//! * `W aaa eee`  – rotate to azimuth and elevation (elevation 0-180 degrees)
+//! * `Maaa`      – rotate to azimuth (0-450 degrees)
+//! * `Waaa eee`  – rotate to azimuth and elevation (elevation 0-180 degrees)
 //! * `S`          – stop all movement
 
 use std::{
@@ -108,11 +108,11 @@ impl Rotator {
                 "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
-        self.send(&format!("M {:03}", azimuth))?;
+        self.send(&format!("M{:03}", azimuth))?;
         Ok(())
     }
 
-    /// Rotate to the given azimuth **and** elevation (`W aaa eee` command).
+    /// Rotate to the given azimuth **and** elevation (`Waaa eee` command).
     ///
     /// `azimuth` must be in [0, 450], `elevation` in [0, 180].
     pub fn set_position(&self, azimuth: u16, elevation: u16) -> Result<(), RotatorError> {
@@ -126,7 +126,7 @@ impl Rotator {
                 "elevation {elevation} is out of range [0, 180]"
             )));
         }
-        self.send(&format!("W {:03} {:03}", azimuth, elevation))?;
+        self.send(&format!("W{:03} {:03}", azimuth, elevation))?;
         Ok(())
     }
 
