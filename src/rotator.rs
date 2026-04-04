@@ -1,15 +1,15 @@
 //! GS-232B serial protocol driver.
 //!
 //! Supported commands:
-//! * `C`          – query current azimuth; response: `AZ=aaa`
-//! * `C2`         – query current azimuth **and** elevation; response: `AZ=aaa EL=eee`
-//! * `Maaa`      – rotate to azimuth (0-450 degrees)
-//! * `Waaa eee`  – rotate to azimuth and elevation (elevation 0-180 degrees)
-//! * `S`          – stop all movement
+//! * `C2`         – query current azimuth and elevation; response: `AZ=aaa EL=eee`
+//! * `Maaa`       – rotate to azimuth (0-450 degrees); no response
+//! * `Waaa eee`   – rotate to azimuth and elevation (elevation 0-180 degrees); no response
+//! * `S`          – stop all movement; no response
 
 use std::{
     io::{BufRead, BufReader, Write},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serialport::SerialPort;
@@ -38,13 +38,16 @@ impl Rotator {
     /// Open the serial port at `device` with the given `baud_rate`.
     pub fn open(device: &str, baud_rate: u32) -> Result<Self, RotatorError> {
         let port = serialport::new(device, baud_rate)
+            .timeout(Duration::from_secs(5))
             .open()?;
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
         })
     }
 
-    /// Send a raw command and read back a single response line.
+    /// Send a command and read back a single response line.
+    ///
+    /// Use for query commands (`C2`) that return a response.
     #[instrument(skip(self))]
     fn send(&self, cmd: &str) -> Result<String, RotatorError> {
         let mut port = self.port.lock().expect("rotator mutex poisoned");
@@ -52,7 +55,6 @@ impl Rotator {
         debug!(command = %command.trim(), "sending GS-232B command");
         port.write_all(command.as_bytes())?;
         port.flush()?;
-
         let mut reader = BufReader::new(&mut **port);
         let mut response = String::new();
         reader.read_line(&mut response)?;
@@ -60,9 +62,24 @@ impl Rotator {
         Ok(response.trim().to_string())
     }
 
-    /// Parse a GS-232B position response `AZ=xxx EL=yyy` into `(azimuth, elevation)`.
-    fn parse_position(raw: &str) -> Result<(f32, f32), RotatorError> {
-        // Response format: "AZ=xxx EL=yyy"  (e.g. "AZ=405 EL=045")
+    /// Send a command without reading a response.
+    ///
+    /// Use for action commands (`M`, `W`, `S`) that produce no response.
+    #[instrument(skip(self))]
+    fn execute(&self, cmd: &str) -> Result<(), RotatorError> {
+        let mut port = self.port.lock().expect("rotator mutex poisoned");
+        let command = format!("{}\r", cmd);
+        debug!(command = %command.trim(), "sending GS-232B command");
+        port.write_all(command.as_bytes())?;
+        port.flush()?;
+        Ok(())
+    }
+
+    /// Query the current azimuth and elevation (`C2` command).
+    ///
+    /// Response format: `AZ=aaa EL=eee`
+    pub fn get_position(&self) -> Result<(f32, f32), RotatorError> {
+        let raw = self.send("C2")?;
         let mut az: Option<f32> = None;
         let mut el: Option<f32> = None;
         for part in raw.split_whitespace() {
@@ -74,27 +91,8 @@ impl Rotator {
         }
         match (az, el) {
             (Some(az), Some(el)) => Ok((az, el)),
-            _ => Err(RotatorError::UnexpectedResponse(raw.to_string())),
+            _ => Err(RotatorError::UnexpectedResponse(raw)),
         }
-    }
-
-    /// Query the current azimuth only (`C` command).
-    ///
-    /// Response format: `AZ=<degrees>`
-    pub fn get_azimuth(&self) -> Result<f32, RotatorError> {
-        let raw = self.send("C")?;
-        // Response is "AZ=<degrees>" (e.g. "AZ=270" or "AZ=405")
-        let az: f32 = raw
-            .strip_prefix("AZ=")
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| RotatorError::UnexpectedResponse(raw.clone()))?;
-        Ok(az)
-    }
-
-    /// Query the current azimuth and elevation (`C2` command).
-    pub fn get_position(&self) -> Result<(f32, f32), RotatorError> {
-        let raw = self.send("C2")?;
-        Self::parse_position(&raw)
     }
 
     /// Rotate to the given azimuth (`M aaa` command).
@@ -106,8 +104,7 @@ impl Rotator {
                 "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
-        self.send(&format!("M{:03}", azimuth))?;
-        Ok(())
+        self.execute(&format!("M{:03}", azimuth))
     }
 
     /// Rotate to the given azimuth **and** elevation (`Waaa eee` command).
@@ -124,13 +121,11 @@ impl Rotator {
                 "elevation {elevation} is out of range [0, 180]"
             )));
         }
-        self.send(&format!("W{:03} {:03}", azimuth, elevation))?;
-        Ok(())
+        self.execute(&format!("W{:03} {:03}", azimuth, elevation))
     }
 
     /// Stop all movement (`S` command).
     pub fn stop(&self) -> Result<(), RotatorError> {
-        self.send("S")?;
-        Ok(())
+        self.execute("S")
     }
 }
