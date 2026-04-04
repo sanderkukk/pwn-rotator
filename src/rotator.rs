@@ -62,31 +62,44 @@ impl Rotator {
         Ok(response.trim().to_string())
     }
 
-    /// Parse a GS-232A position response `+0aaa+0eee` into `(azimuth, elevation)`.
+    /// Parse a position response into `(azimuth, elevation)`.
+    ///
+    /// Supports two formats:
+    /// * GS-232A: `+0aaa+0eee` (e.g. `+0123+0045`)
+    /// * Alternative: `AZ=aaa  EL=eee` (e.g. `AZ=323  EL=180`)
     fn parse_position(raw: &str) -> Result<(f32, f32), RotatorError> {
-        // Response format: +0aaa+0eee  (e.g. "+0123+0045")
-        if raw.len() < 10 {
-            return Err(RotatorError::UnexpectedResponse(raw.to_string()));
+        // Try GS-232A format: +0aaa+0eee  (e.g. "+0123+0045")
+        if raw.len() >= 10 {
+            if let (Ok(az), Ok(el)) = (raw[0..5].parse::<f32>(), raw[5..10].parse::<f32>()) {
+                return Ok((az, el));
+            }
         }
-        let az_str = &raw[0..5];   // "+0aaa"
-        let el_str = &raw[5..10];  // "+0eee"
-        let az: f32 = az_str
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.to_string()))?;
-        let el: f32 = el_str
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.to_string()))?;
-        Ok((az, el))
+        // Try alternative format: AZ=aaa  EL=eee  (e.g. "AZ=323  EL=180")
+        if let (Some(az_pos), Some(el_pos)) = (raw.find("AZ="), raw.find("EL=")) {
+            let az_str = raw[az_pos + 3..].split_whitespace().next().unwrap_or("");
+            let el_str = raw[el_pos + 3..].split_whitespace().next().unwrap_or("");
+            if let (Ok(az), Ok(el)) = (az_str.parse::<f32>(), el_str.parse::<f32>()) {
+                return Ok((az, el));
+            }
+        }
+        Err(RotatorError::UnexpectedResponse(raw.to_string()))
     }
 
     /// Query the current azimuth only (`C` command).
     pub fn get_azimuth(&self) -> Result<f32, RotatorError> {
         let raw = self.send("C")?;
-        // Response is "+0aaa" (5 chars)
-        let az: f32 = raw
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.clone()))?;
-        Ok(az)
+        // Try GS-232A format: "+0aaa" (e.g. "+0123")
+        if let Ok(az) = raw.parse::<f32>() {
+            return Ok(az);
+        }
+        // Try alternative format: "AZ=aaa" (e.g. "AZ=323")
+        if let Some(az_pos) = raw.find("AZ=") {
+            let az_str = raw[az_pos + 3..].split_whitespace().next().unwrap_or("");
+            if let Ok(az) = az_str.parse::<f32>() {
+                return Ok(az);
+            }
+        }
+        Err(RotatorError::UnexpectedResponse(raw))
     }
 
     /// Query the current azimuth and elevation (`C2` command).
