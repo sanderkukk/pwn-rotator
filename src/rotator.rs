@@ -1,16 +1,15 @@
 //! GS-232B serial protocol driver.
 //!
 //! Supported commands:
-//! * `Maaa`      – rotate to azimuth (0-450 degrees)
-//! * `Waaa eee`  – rotate to azimuth and elevation (elevation 0-180 degrees)
-//! * `S`          – stop all movement
-//!
-//! This device uses a write-only protocol: no response is returned for any command.
-//! The last commanded position is tracked in memory and returned by `get_position`.
+//! * `C2`         – query current azimuth and elevation; response: `AZ=aaa EL=eee`
+//! * `Maaa`       – rotate to azimuth (0-450 degrees); no response
+//! * `Waaa eee`   – rotate to azimuth and elevation (elevation 0-180 degrees); no response
+//! * `S`          – stop all movement; no response
 
 use std::{
-    io::Write,
+    io::{BufRead, BufReader, Write},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serialport::SerialPort;
@@ -23,36 +22,49 @@ pub enum RotatorError {
     Serial(#[from] serialport::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("unexpected response from rotator: {0:?}")]
+    UnexpectedResponse(String),
     #[error("value out of range: {0}")]
     OutOfRange(String),
-}
-
-struct RotatorState {
-    azimuth: f32,
-    elevation: f32,
 }
 
 /// Thread-safe handle to the rotator serial port.
 #[derive(Clone)]
 pub struct Rotator {
     port: Arc<Mutex<Box<dyn SerialPort>>>,
-    state: Arc<Mutex<RotatorState>>,
 }
 
 impl Rotator {
     /// Open the serial port at `device` with the given `baud_rate`.
     pub fn open(device: &str, baud_rate: u32) -> Result<Self, RotatorError> {
-        let port = serialport::new(device, baud_rate).open()?;
+        let port = serialport::new(device, baud_rate)
+            .timeout(Duration::from_secs(5))
+            .open()?;
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
-            state: Arc::new(Mutex::new(RotatorState {
-                azimuth: 0.0,
-                elevation: 0.0,
-            })),
         })
     }
 
-    /// Send a raw command over the serial port. No response is read.
+    /// Send a command and read back a single response line.
+    ///
+    /// Use for query commands (`C2`) that return a response.
+    #[instrument(skip(self))]
+    fn send(&self, cmd: &str) -> Result<String, RotatorError> {
+        let mut port = self.port.lock().expect("rotator mutex poisoned");
+        let command = format!("{}\r", cmd);
+        debug!(command = %command.trim(), "sending GS-232B command");
+        port.write_all(command.as_bytes())?;
+        port.flush()?;
+        let mut reader = BufReader::new(&mut **port);
+        let mut response = String::new();
+        reader.read_line(&mut response)?;
+        debug!(response = %response.trim(), "received GS-232B response");
+        Ok(response.trim().to_string())
+    }
+
+    /// Send a command without reading a response.
+    ///
+    /// Use for action commands (`M`, `W`, `S`) that produce no response.
     #[instrument(skip(self))]
     fn execute(&self, cmd: &str) -> Result<(), RotatorError> {
         let mut port = self.port.lock().expect("rotator mutex poisoned");
@@ -63,13 +75,24 @@ impl Rotator {
         Ok(())
     }
 
-    /// Return the last commanded azimuth and elevation.
+    /// Query the current azimuth and elevation (`C2` command).
     ///
-    /// The device does not report its position; this reflects the most recent
-    /// `set_azimuth` / `set_position` call, defaulting to `(0.0, 0.0)`.
+    /// Response format: `AZ=aaa EL=eee`
     pub fn get_position(&self) -> Result<(f32, f32), RotatorError> {
-        let s = self.state.lock().expect("rotator state mutex poisoned");
-        Ok((s.azimuth, s.elevation))
+        let raw = self.send("C2")?;
+        let mut az: Option<f32> = None;
+        let mut el: Option<f32> = None;
+        for part in raw.split_whitespace() {
+            if let Some(val) = part.strip_prefix("AZ=") {
+                az = val.parse().ok();
+            } else if let Some(val) = part.strip_prefix("EL=") {
+                el = val.parse().ok();
+            }
+        }
+        match (az, el) {
+            (Some(az), Some(el)) => Ok((az, el)),
+            _ => Err(RotatorError::UnexpectedResponse(raw)),
+        }
     }
 
     /// Rotate to the given azimuth (`M aaa` command).
@@ -81,10 +104,7 @@ impl Rotator {
                 "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
-        self.execute(&format!("M{:03}", azimuth))?;
-        let mut s = self.state.lock().expect("rotator state mutex poisoned");
-        s.azimuth = f32::from(azimuth);
-        Ok(())
+        self.execute(&format!("M{:03}", azimuth))
     }
 
     /// Rotate to the given azimuth **and** elevation (`Waaa eee` command).
@@ -101,11 +121,7 @@ impl Rotator {
                 "elevation {elevation} is out of range [0, 180]"
             )));
         }
-        self.execute(&format!("W{:03} {:03}", azimuth, elevation))?;
-        let mut s = self.state.lock().expect("rotator state mutex poisoned");
-        s.azimuth = f32::from(azimuth);
-        s.elevation = f32::from(elevation);
-        Ok(())
+        self.execute(&format!("W{:03} {:03}", azimuth, elevation))
     }
 
     /// Stop all movement (`S` command).
