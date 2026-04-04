@@ -10,7 +10,6 @@
 use std::{
     io::{BufRead, BufReader, Write},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use serialport::SerialPort;
@@ -39,7 +38,6 @@ impl Rotator {
     /// Open the serial port at `device` with the given `baud_rate`.
     pub fn open(device: &str, baud_rate: u32) -> Result<Self, RotatorError> {
         let port = serialport::new(device, baud_rate)
-            .timeout(Duration::from_millis(2000))
             .open()?;
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
