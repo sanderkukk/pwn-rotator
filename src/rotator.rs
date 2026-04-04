@@ -10,6 +10,7 @@
 use std::{
     io::{BufRead, BufReader, Write},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serialport::SerialPort;
@@ -38,6 +39,7 @@ impl Rotator {
     /// Open the serial port at `device` with the given `baud_rate`.
     pub fn open(device: &str, baud_rate: u32) -> Result<Self, RotatorError> {
         let port = serialport::new(device, baud_rate)
+            .timeout(Duration::from_secs(2))
             .open()?;
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
@@ -45,6 +47,8 @@ impl Rotator {
     }
 
     /// Send a raw command and read back a single response line.
+    ///
+    /// Use this for query commands (`C`, `C2`) that produce a response.
     #[instrument(skip(self))]
     fn send(&self, cmd: &str) -> Result<String, RotatorError> {
         let mut port = self.port.lock().expect("rotator mutex poisoned");
@@ -58,6 +62,19 @@ impl Rotator {
         reader.read_line(&mut response)?;
         debug!(response = %response.trim(), "received GS-232B response");
         Ok(response.trim().to_string())
+    }
+
+    /// Send a raw command without reading a response.
+    ///
+    /// Use this for action commands (`M`, `W`, `S`) that produce no response.
+    #[instrument(skip(self))]
+    fn execute(&self, cmd: &str) -> Result<(), RotatorError> {
+        let mut port = self.port.lock().expect("rotator mutex poisoned");
+        let command = format!("{}\r", cmd);
+        debug!(command = %command.trim(), "sending GS-232B command");
+        port.write_all(command.as_bytes())?;
+        port.flush()?;
+        Ok(())
     }
 
     /// Parse a GS-232B position response `AZ=xxx EL=yyy` into `(azimuth, elevation)`.
@@ -106,8 +123,7 @@ impl Rotator {
                 "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
-        self.send(&format!("M{:03}", azimuth))?;
-        Ok(())
+        self.execute(&format!("M{:03}", azimuth))
     }
 
     /// Rotate to the given azimuth **and** elevation (`Waaa eee` command).
@@ -124,13 +140,11 @@ impl Rotator {
                 "elevation {elevation} is out of range [0, 180]"
             )));
         }
-        self.send(&format!("W{:03} {:03}", azimuth, elevation))?;
-        Ok(())
+        self.execute(&format!("W{:03} {:03}", azimuth, elevation))
     }
 
     /// Stop all movement (`S` command).
     pub fn stop(&self) -> Result<(), RotatorError> {
-        self.send("S")?;
-        Ok(())
+        self.execute("S")
     }
 }
