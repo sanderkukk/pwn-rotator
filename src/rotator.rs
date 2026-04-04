@@ -76,8 +76,8 @@ impl Rotator {
         }
         // Try alternative format: AZ=aaa  EL=eee  (e.g. "AZ=323  EL=180")
         if let (Some(az_pos), Some(el_pos)) = (raw.find("AZ="), raw.find("EL=")) {
-            let az_str = raw[az_pos + 3..].split_whitespace().next().unwrap_or("");
-            let el_str = raw[el_pos + 3..].split_whitespace().next().unwrap_or("");
+            let az_str = raw.get(az_pos + 3..).unwrap_or("").split_whitespace().next().unwrap_or("");
+            let el_str = raw.get(el_pos + 3..).unwrap_or("").split_whitespace().next().unwrap_or("");
             if let (Ok(az), Ok(el)) = (az_str.parse::<f32>(), el_str.parse::<f32>()) {
                 return Ok((az, el));
             }
@@ -94,7 +94,7 @@ impl Rotator {
         }
         // Try alternative format: "AZ=aaa" (e.g. "AZ=323")
         if let Some(az_pos) = raw.find("AZ=") {
-            let az_str = raw[az_pos + 3..].split_whitespace().next().unwrap_or("");
+            let az_str = raw.get(az_pos + 3..).unwrap_or("").split_whitespace().next().unwrap_or("");
             if let Ok(az) = az_str.parse::<f32>() {
                 return Ok(az);
             }
