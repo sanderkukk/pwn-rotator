@@ -1,9 +1,9 @@
-//! GS-232A serial protocol driver.
+//! GS-232B serial protocol driver.
 //!
 //! Supported commands:
-//! * `C`          – query current azimuth
-//! * `C2`         – query current azimuth **and** elevation
-//! * `M aaa`      – rotate to azimuth (0-359 degrees)
+//! * `C`          – query current azimuth; response: `AZ=aaa`
+//! * `C2`         – query current azimuth **and** elevation; response: `AZ=aaa EL=eee`
+//! * `M aaa`      – rotate to azimuth (0-450 degrees)
 //! * `W aaa eee`  – rotate to azimuth and elevation (elevation 0-180 degrees)
 //! * `S`          – stop all movement
 
@@ -51,41 +51,45 @@ impl Rotator {
     fn send(&self, cmd: &str) -> Result<String, RotatorError> {
         let mut port = self.port.lock().expect("rotator mutex poisoned");
         let command = format!("{}\r", cmd);
-        debug!(command = %command.trim(), "sending GS-232A command");
+        debug!(command = %command.trim(), "sending GS-232B command");
         port.write_all(command.as_bytes())?;
         port.flush()?;
 
         let mut reader = BufReader::new(&mut **port);
         let mut response = String::new();
         reader.read_line(&mut response)?;
-        debug!(response = %response.trim(), "received GS-232A response");
+        debug!(response = %response.trim(), "received GS-232B response");
         Ok(response.trim().to_string())
     }
 
-    /// Parse a GS-232A position response `+0aaa+0eee` into `(azimuth, elevation)`.
+    /// Parse a GS-232B position response `AZ=xxx EL=yyy` into `(azimuth, elevation)`.
     fn parse_position(raw: &str) -> Result<(f32, f32), RotatorError> {
-        // Response format: +0aaa+0eee  (e.g. "+0123+0045")
-        if raw.len() < 10 {
-            return Err(RotatorError::UnexpectedResponse(raw.to_string()));
+        // Response format: "AZ=xxx EL=yyy"  (e.g. "AZ=405 EL=045")
+        let mut az: Option<f32> = None;
+        let mut el: Option<f32> = None;
+        for part in raw.split_whitespace() {
+            if let Some(val) = part.strip_prefix("AZ=") {
+                az = val.parse().ok();
+            } else if let Some(val) = part.strip_prefix("EL=") {
+                el = val.parse().ok();
+            }
         }
-        let az_str = &raw[0..5];   // "+0aaa"
-        let el_str = &raw[5..10];  // "+0eee"
-        let az: f32 = az_str
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.to_string()))?;
-        let el: f32 = el_str
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.to_string()))?;
-        Ok((az, el))
+        match (az, el) {
+            (Some(az), Some(el)) => Ok((az, el)),
+            _ => Err(RotatorError::UnexpectedResponse(raw.to_string())),
+        }
     }
 
     /// Query the current azimuth only (`C` command).
+    ///
+    /// Response format: `AZ=<degrees>`
     pub fn get_azimuth(&self) -> Result<f32, RotatorError> {
         let raw = self.send("C")?;
-        // Response is "+0aaa" (5 chars)
+        // Response is "AZ=<degrees>" (e.g. "AZ=270" or "AZ=405")
         let az: f32 = raw
-            .parse()
-            .map_err(|_| RotatorError::UnexpectedResponse(raw.clone()))?;
+            .strip_prefix("AZ=")
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| RotatorError::UnexpectedResponse(raw.clone()))?;
         Ok(az)
     }
 
@@ -97,11 +101,11 @@ impl Rotator {
 
     /// Rotate to the given azimuth (`M aaa` command).
     ///
-    /// `azimuth` must be in [0, 359].
+    /// `azimuth` must be in [0, 450].
     pub fn set_azimuth(&self, azimuth: u16) -> Result<(), RotatorError> {
-        if azimuth > 359 {
+        if azimuth > 450 {
             return Err(RotatorError::OutOfRange(format!(
-                "azimuth {azimuth} is out of range [0, 359]"
+                "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
         self.send(&format!("M {:03}", azimuth))?;
@@ -110,11 +114,11 @@ impl Rotator {
 
     /// Rotate to the given azimuth **and** elevation (`W aaa eee` command).
     ///
-    /// `azimuth` must be in [0, 359], `elevation` in [0, 180].
+    /// `azimuth` must be in [0, 450], `elevation` in [0, 180].
     pub fn set_position(&self, azimuth: u16, elevation: u16) -> Result<(), RotatorError> {
-        if azimuth > 359 {
+        if azimuth > 450 {
             return Err(RotatorError::OutOfRange(format!(
-                "azimuth {azimuth} is out of range [0, 359]"
+                "azimuth {azimuth} is out of range [0, 450]"
             )));
         }
         if elevation > 180 {
