@@ -64,12 +64,7 @@ pub struct RotateRequest {
 pub async fn get_status(
     State(state): State<AppState>,
 ) -> Result<Json<PositionResponse>, ApiError> {
-    let (azimuth, elevation) = tokio::task::spawn_blocking(move || {
-        state.rotator.get_position()
-    })
-    .await
-    .expect("blocking task panicked")?;
-
+    let (azimuth, elevation) = state.rotator.get_position().await?;
     Ok(Json(PositionResponse { azimuth, elevation }))
 }
 
@@ -80,16 +75,11 @@ pub async fn post_rotate(
     State(state): State<AppState>,
     Json(payload): Json<RotateRequest>,
 ) -> Result<StatusCode, ApiError> {
-    tokio::task::spawn_blocking(move || {
-        if let Some(el) = payload.elevation {
-            state.rotator.set_position(payload.azimuth, el)
-        } else {
-            state.rotator.set_azimuth(payload.azimuth)
-        }
-    })
-    .await
-    .expect("blocking task panicked")?;
-
+    if let Some(el) = payload.elevation {
+        state.rotator.set_position(payload.azimuth, el).await?;
+    } else {
+        state.rotator.set_azimuth(payload.azimuth).await?;
+    }
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -97,9 +87,6 @@ pub async fn post_rotate(
 pub async fn post_stop(
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    tokio::task::spawn_blocking(move || state.rotator.stop())
-        .await
-        .expect("blocking task panicked")?;
-
+    state.rotator.stop().await?;
     Ok(StatusCode::OK)
 }
