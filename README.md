@@ -1,6 +1,6 @@
 # pwn-rotator
 
-Rust web API for an antenna rotator using the **GS-232A** protocol over a serial port or a remote RFC 2217 serial server.
+Rust web API for an antenna rotator using the **GS-232B** protocol over a serial port or a remote RFC 2217 serial server.
 
 ## Endpoints
 

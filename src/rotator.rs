@@ -29,6 +29,9 @@ const SB: u8 = 0xFA;
 const SE: u8 = 0xF0;
 const COM_PORT_OPTION: u8 = 0x2C;
 
+/// Maximum delay between reconnection attempts.
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
 // ── Error type ────────────────────────────────────────────────────────────────
 #[derive(Debug, Error)]
 pub enum RotatorError {
@@ -175,7 +178,7 @@ impl Rfc2217Connection {
                         "RFC 2217 reconnect failed, retrying"
                     );
                     tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(Duration::from_secs(30));
+                    delay = (delay * 2).min(MAX_RECONNECT_DELAY);
                 }
             }
         }
@@ -213,7 +216,10 @@ impl Rfc2217Connection {
 // ── Connection enum ───────────────────────────────────────────────────────────
 
 enum Connection {
-    Local(tokio_serial::SerialStream),
+    /// Local serial port wrapped in a `BufReader` for efficient line reading.
+    /// `tokio::io::BufReader` passes writes through to the inner stream, so
+    /// the same handle is used for both directions.
+    Local(BufReader<tokio_serial::SerialStream>),
     Remote(Rfc2217Connection),
 }
 
@@ -231,9 +237,8 @@ impl Connection {
     async fn read_response_line(&mut self) -> io::Result<String> {
         match self {
             Connection::Local(s) => {
-                let mut reader = BufReader::new(s);
                 let mut line = String::new();
-                reader.read_line(&mut line).await?;
+                s.read_line(&mut line).await?;
                 Ok(line)
             }
             Connection::Remote(r) => r.read_line().await,
@@ -277,7 +282,7 @@ impl Rotator {
             Connection::Remote(rfc)
         } else {
             let stream = tokio_serial::new(device, baud_rate).open_native_async()?;
-            Connection::Local(stream)
+            Connection::Local(BufReader::new(stream))
         };
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
