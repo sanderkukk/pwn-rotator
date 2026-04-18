@@ -24,12 +24,15 @@ async fn main() {
 
     let cfg = Config::from_env();
 
-    info!(device = %cfg.device, baud_rate = cfg.baud_rate, "opening serial port");
+    info!(device = %cfg.device, "opening rotator connection");
 
-    let rotator = Rotator::open(&cfg.device, cfg.baud_rate).unwrap_or_else(|e| {
-        tracing::error!("failed to open {}: {}", cfg.device, e);
-        std::process::exit(1);
-    });
+    let rotator = match Rotator::open(&cfg.device, cfg.baud_rate).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("failed to open {}: {}", cfg.device, e);
+            std::process::exit(1);
+        }
+    };
 
     let state = AppState { rotator };
 
